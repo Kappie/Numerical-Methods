@@ -13,6 +13,68 @@ J = 1   # Coupling constant
 n_thermalization = 10000
 n_sweeps = 2 ** 14
 
+class Measurement:
+    # Coupling constant
+    J = 1
+    n_samples = 2 ** 14
+
+    def __init__(self, observable, T, L, markov_chain):
+        self.observable = observable
+        self.T = T
+        self.L = L
+        self.N = L * L
+        self.markov_chain = markov_chain
+
+    def samples(self):
+        samples = np.empty(self.n_samples)
+        for i in range(self.n_samples):
+            self.markov_chain.perform_sweep(self.N)
+            samples[i] = self.observable(self.markov_chain.config)
+
+        return samples
+
+class MarkovChain:
+    n_thermalization = 10000
+
+    def __init__(self, initial_config, T):
+        self.config = initial_config
+        self.T = T
+        self.thermalize()
+
+    def thermalize(self):
+        self.perform_sweep(n_thermalization)
+
+    def perform_sweep(self, N):
+        for i in range(N):
+            self.next_config()
+
+    def next_config(self):
+        coordinate = self.random_coordinate()
+        energy_difference = self.energy_difference_with_flipped_spin(coordinate)
+
+        if energy_difference < 0 or random.uniform() < self.boltzmann_weight(energy_difference):
+            self.flip_spin(coordinate)
+
+    def random_coordinate(self):
+        return (random.randint(L), random.randint(L))
+
+    def flip_spin(self, coordinate):
+        self.config[coordinate] *= -1
+
+    # Calculates energy difference between config and config with spin flipped
+    # at coordinate.
+    def energy_difference_with_flipped_spin(self, coordinate):
+        return 2 * J * self.config[coordinate] * np.sum(self.neighbors(*coordinate))
+
+    def boltzmann_weight(self, energy_difference):
+        return np.exp(-energy_difference / self.T)
+
+    def neighbors(self, x, y):
+        return [
+            self.config[(x + 1) % L, y], self.config[x - 1, y], self.config[x, (y + 1) % L], self.config[x, y - 1]
+        ]
+
+
 def hamiltonian(configuration):
     total_contribution = 0
     # Sum over each spin's neighbors. Need to multiple by 1/2 because I count every
@@ -26,7 +88,7 @@ def magnetization(configuration):
     return np.sum(configuration)
 
 def order_parameter(configuration):
-    return np.abs(magnetization(configuration)) / N
+    return np.abs(magnetization(configuration)) / configuration.size
 
 def energy_per_site(configuration):
     return hamiltonian(configuration) / N
@@ -37,44 +99,8 @@ def magnetization_per_site(configuration):
 def magnetization_squared(configuration):
     return magnetization(configuration) ** 2
 
-# Returns a 1D array of neighbours of given element. (Does not include
-# the element itself.) Expects config to be a 2D array-like structure.
-def neighbors(config, x, y, n=1):
-    return [
-        config[(x + 1) % L, y], config[x - 1, y], config[x, (y + 1) % L], config[x, y - 1]
-    ]
-
 def random_configuration():
     return 2 * random.random_integers(0, 1, (L, L)) - 1
-
-def random_coordinate():
-    return (random.randint(L), random.randint(L))
-
-def flip_spin(config, coordinate):
-    config[coordinate] *= -1
-
-# Calculates energy difference between config and config with spin flipped
-# at coordinate.
-def energy_difference_with_flipped_spin(config, coordinate):
-    return 2 * J * config[coordinate] * np.sum(neighbors(config, *coordinate))
-
-def boltzmann_weight(energy_difference):
-    return np.exp(-energy_difference / T)
-
-def next_config(config):
-    coordinate = random_coordinate()
-    energy_difference = energy_difference_with_flipped_spin(config, coordinate)
-
-    if energy_difference < 0 or random.uniform() < boltzmann_weight(energy_difference):
-        flip_spin(config, coordinate)
-
-    return config
-
-def take_steps(config, n):
-    for _ in range(n):
-        config = next_config(config)
-
-    return config
 
 def binning_analysis(samples):
     """
@@ -104,50 +130,10 @@ def convergence_rate(errors):
 def integrated_autocorrelation_time(bin_errors):
     return 0.5 * ( (errors[-1] / errors[0]) ** 2 - 1 )
 
-def measurement(observable, temperatures, initial_config):
-    measurements = np.empty(temperatures.size)
-
-    for temp in temperatures:
-        samples = np.empty(n_sweeps)
-
-        for i in range(n_sweeps):
-            config = take_steps(config, N)
-            samples[i] = observable(config)
-
-        return measurements
 
 ### MAIN LOOP ###
-# Thermalize the markov chain
-config = random_configuration()
-config = take_steps(config, n_thermalization)
+T = 3
+markov_chain = MarkovChain(initial_config = random_configuration(), T = T)
+samples = Measurement(observable = order_parameter, T = T, L = 4, markov_chain = markov_chain).samples()
 
-# Perform measurements
-order_parameters = np.empty(temperatures.size)
-# for T in temperatures:
-#     measurements = np.empty(n_sweeps)
-#
-#     for i in range(n_sweeps):
-#         # Measure after performing N = L * L metropolis steps
-#         config = take_steps(config, N)
-#         measurements[i] = order_parameter(config)
-#         # measurements_energy_per_site[i] = energy_per_site(config)
-#         # measurements_magnetization_squared[i] = magnetization_squared(config)
-#         # measurements_magnetization_per_site[i] = magnetization_per_site(config)
-#
-#     bin_errors = binning_analysis(measurements)
-#     plot.plot(bin_errors, 'ko')
-#     plot.xlabel("binning step")
-#     plot.ylabel("estimated error")
-#     print "<m>: {m} +/- {error}.".format(m = np.mean(measurements), error = bin_errors[-1])
-#     if convergence_rate(bin_errors) > 0.05:
-#         print """Warning: binning analysis did not converge on error estimate.
-#         Mean relative change of last few estimates was only {change}.""".format(change = convergence_rate(bin_errors))
-#
-# plot.show()
-
-plot.plot([(1, 0), (2, 1), (3, 10), (4, 20)])
-plot.show()
-
-# print "<E/N>", np.mean(measurements_energy_per_site)
-# print "<M^2>", np.mean(measurements_magnetization_squared)
-# print "<M/N>", np.mean(measurements_magnetization_per_site)
+print np.mean(samples)
