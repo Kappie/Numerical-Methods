@@ -5,135 +5,171 @@ import matplotlib.pyplot as plot
 import itertools
 import pdb
 
-temperatures = np.array([0.125, 0.25, 0.5, 1, 2, 4])
-L = 4
-N = L * L
-J = 1   # Coupling constant
+class IsingModel:
+    """
+    Two-dimensional Ising model. The next state of the model is determined by a
+    single spin-flip metropolis algorithm. It thermalizes the Markov chain upon initialization.
+    """
 
-n_thermalization = 10000
-n_sweeps = 2 ** 14
+    thermalization_steps = 10000
+    J = 1   # Coupling constant
 
-class Measurement:
-    # Coupling constant
-    J = 1
-    n_samples = 2 ** 14
-
-    def __init__(self, observable, T, L, markov_chain):
-        self.observable = observable
+    def __init__(self, T, L):
         self.T = T
         self.L = L
         self.N = L * L
-        self.markov_chain = markov_chain
-
-    def samples(self):
-        samples = np.empty(self.n_samples)
-        for i in range(self.n_samples):
-            self.markov_chain.perform_sweep(self.N)
-            samples[i] = self.observable(self.markov_chain.config)
-
-        return samples
-
-class MarkovChain:
-    n_thermalization = 10000
-
-    def __init__(self, initial_config, T):
-        self.config = initial_config
-        self.T = T
+        self.lattice = Lattice(L)
         self.thermalize()
 
     def thermalize(self):
-        self.perform_sweep(n_thermalization)
+        self.take_steps(self.thermalization_steps)
 
-    def perform_sweep(self, N):
-        for i in range(N):
-            self.next_config()
+    def perform_sweep(self):
+        self.take_steps(self.N)
 
-    def next_config(self):
+    def take_steps(self, n):
+        for _ in range(n):
+            self.take_step()
+
+    def take_step(self):
         coordinate = self.random_coordinate()
         energy_difference = self.energy_difference_with_flipped_spin(coordinate)
 
         if energy_difference < 0 or random.uniform() < self.boltzmann_weight(energy_difference):
-            self.flip_spin(coordinate)
-
-    def random_coordinate(self):
-        return (random.randint(L), random.randint(L))
-
-    def flip_spin(self, coordinate):
-        self.config[coordinate] *= -1
+            self.lattice.flip_spin(coordinate)
 
     # Calculates energy difference between config and config with spin flipped
     # at coordinate.
     def energy_difference_with_flipped_spin(self, coordinate):
-        return 2 * J * self.config[coordinate] * np.sum(self.neighbors(*coordinate))
+        return 2 * self.J * self.lattice.spin_at(coordinate) * np.sum(self.lattice.neighbors(coordinate))
 
     def boltzmann_weight(self, energy_difference):
         return np.exp(-energy_difference / self.T)
 
-    def neighbors(self, x, y):
+    def random_coordinate(self):
+        return (random.randint(self.L), random.randint(self.L))
+
+    # Observables
+    def order_parameter(self):
+        return np.abs(self.magnetization()) / self.N
+
+    def energy_per_site(self):
+        return self.hamiltonian() / self.N
+
+    def magnetization_per_site(self):
+        return self.magnetization() / self.N
+
+    def magnetization_squared(self):
+        return self.magnetization() ** 2
+
+    def hamiltonian(self):
+        total_contribution = 0
+
+        for coordinate, spin in np.ndenumerate(self.lattice.config):
+            total_contribution += np.sum( spin * self.lattice.neighbors(coordinate) )
+
+        return -self.J * total_contribution
+
+    def magnetization(self):
+        return np.sum(self.lattice.config)
+
+class Lattice:
+    """
+    Two-dimensional spin lattice with periodic boundary conditions. Initializes randomly.
+    Spins are represented by 1 and -1.
+    """
+
+    def __init__(self, L):
+        self.L = L
+        self.config = self.random_configuration()
+
+    def spin_at(self, coordinate):
+        return self.config[coordinate]
+
+    def flip_spin(self, coordinate):
+        self.config[coordinate] *= -1
+
+    def neighbors(self, coordinate):
+        x, y = coordinate
         return [
-            self.config[(x + 1) % L, y], self.config[x - 1, y], self.config[x, (y + 1) % L], self.config[x, y - 1]
+            self.config[(x + 1) % self.L, y],
+            self.config[x - 1, y],
+            self.config[x, (y + 1) % self.L],
+            self.config[x, y - 1]
         ]
 
+    def random_configuration(self):
+        return 2 * random.random_integers(0, 1, (self.L, self.L)) - 1
 
-def hamiltonian(configuration):
-    total_contribution = 0
-    # Sum over each spin's neighbors. Need to multiple by 1/2 because I count every
-    # interaction twice (?). Doesn't seem to be the case. I removed factor 1/2.
-    for (x, y), spin in np.ndenumerate(configuration):
-        total_contribution += np.sum( spin * neighbors(configuration, x, y) )
-
-    return -J * total_contribution
-
-def magnetization(configuration):
-    return np.sum(configuration)
-
-def order_parameter(configuration):
-    return np.abs(magnetization(configuration)) / configuration.size
-
-def energy_per_site(configuration):
-    return hamiltonian(configuration) / N
-
-def magnetization_per_site(configuration):
-    return magnetization(configuration) / N
-
-def magnetization_squared(configuration):
-    return magnetization(configuration) ** 2
-
-def random_configuration():
-    return 2 * random.random_integers(0, 1, (L, L)) - 1
-
-def binning_analysis(samples):
+class Measurement:
     """
-    Assumes samples.size is a power of 2. Returns an array with the naive monte carlo error estimate sigma / sqrt(N - 1)
-    (assumption that samples are uncorrelated) for each binning order, starting with order 0 (i.e.
-    all samples in their own bin) down to the minimum number of bins.
+    Samples the Monte Carlo Ising model and performs binning analysis.
     """
-    minimum_number_of_bins = 2 ** 6
-    binning_steps = int( np.log2(samples.size / minimum_number_of_bins) ) + 1
-    bins = np.copy(samples)
+    n_samples = 2 ** 13
 
-    errors = np.empty(binning_steps)
-    for l in range(binning_steps):
-        errors[l] = np.std(bins) / np.sqrt(bins.size - 1)
-        # Take average of consecutive bins for next binning order
-        bins = np.array( (bins[::2] + bins[1::2]) / 2 )
+    def __init__(self, model):
+        self.model = model
+        self.get_samples()
+        self.binning_analysis()
 
-    return errors
+    # Only sample order parameter for now.
+    def get_samples(self):
+        self.samples = np.empty(self.n_samples)
 
-def convergence_rate(errors):
-    """
-    Determines the average of the last few relative changes of an array of error estimates of a binning analysis.
-    """
-    relative_changes = errors[1:] - errors[:-1] / errors[1:]
-    return np.mean(relative_changes[-3:])
+        for i in range(self.n_samples):
+            self.model.perform_sweep()
+            self.samples[i] = self.model.order_parameter()
 
-def integrated_autocorrelation_time(bin_errors):
-    return 0.5 * ( (errors[-1] / errors[0]) ** 2 - 1 )
+        self.expectation_value = np.mean(self.samples)
+        return self.samples
+
+    def binning_analysis(self):
+        """
+        Assumes samples.size is a power of 2. Returns an array with the naive monte carlo error estimate sigma / sqrt(N - 1)
+        (assumption that samples are uncorrelated) for each binning order, starting with order 0 (i.e.
+        all samples in their own bin) down to the minimum number of bins.
+        """
+        minimum_number_of_bins = 2 ** 6
+        binning_steps = int( np.log2(self.samples.size / minimum_number_of_bins) ) + 1
+        bins = np.copy(self.samples)
+
+        self.errors = np.empty(binning_steps)
+        for l in     range(binning_steps):
+            self.errors[l] = np.std(bins) / np.sqrt(bins.size - 1)
+            # Take average of consecutive bins for next binning order
+            bins = np.array( (bins[::2] + bins[1::2]) / 2 )
+
+        self.std = self.errors[-1]
+
+        if self.convergence_rate() > 0.05:
+            self.error_message = """Error estimates of binning analysis did not converge.
+            Convergence rate was only {rate}.""".format(rate = self.convergence_rate())
+            print self.error_message
+
+        return self.errors
+
+    def convergence_rate(self):
+        """
+        Determines the average of the last few relative changes of an array of error estimates of a binning analysis.
+        """
+        relative_changes = self.errors[1:] - self.errors[:-1] / self.errors[1:]
+        return np.mean(relative_changes[-3:])
+
+    def integrated_autocorrelation_time(self):
+        return 0.5 * ( (self.errors[-1] / self.errors[0]) ** 2 - 1 )
 
 
-### MAIN LOOP ###
-T = 3
-markov_chain = MarkovChain(initial_config = random_configuration(), T = T)
-samples = Measurement(observable = order_parameter, T = T, L = 4, markov_chain = markov_chain).samples()
+temperatures = [0.125, 0.25, 0.5, 1, 2, 4]
+L = 4
+expectation_values = []
+stds = []
 
-print np.mean(samples)
+for T in temperatures:
+    model = IsingModel(T, L)
+    measurement = Measurement(model)
+    expectation_values.append(measurement.expectation_value)
+    stds.append(measurement.std)
+
+print stds
+plot.errorbar(temperatures, expectation_values, yerr = stds)
+plot.show()
