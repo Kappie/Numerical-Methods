@@ -7,36 +7,21 @@ import pdb
 
 class IsingModel:
     """
-    Two-dimensional Ising model. The next state of the model is determined by a
-    single spin-flip metropolis algorithm. It thermalizes the Markov chain upon initialization.
+    Two-dimensional Ising model.
     """
 
-    thermalization_steps = 10000
     J = 1   # Coupling constant
 
-    def __init__(self, T, L):
+    def __init__(self, T, L, markov_chain):
         self.T = T
         self.L = L
         self.N = L * L
         self.lattice = Lattice(L)
-        self.thermalize()
+        self.markov_chain = markov_chain(self)
 
-    def thermalize(self):
-        self.take_steps(self.thermalization_steps)
 
     def perform_sweep(self):
-        self.take_steps(self.N)
-
-    def take_steps(self, n):
-        for _ in range(n):
-            self.take_step()
-
-    def take_step(self):
-        coordinate = self.random_coordinate()
-        energy_difference = self.energy_difference_with_flipped_spin(coordinate)
-
-        if energy_difference < 0 or random.uniform() < self.boltzmann_weight(energy_difference):
-            self.lattice.flip_spin(coordinate)
+        self.markov_chain.perform_sweep()
 
     # Calculates energy difference between config and config with spin flipped
     # at coordinate.
@@ -46,32 +31,6 @@ class IsingModel:
     def boltzmann_weight(self, energy_difference):
         return np.exp(-energy_difference / self.T)
 
-    def random_coordinate(self):
-        return (random.randint(self.L), random.randint(self.L))
-
-    # Observables
-    def order_parameter(self):
-        return np.abs(self.magnetization()) / self.N
-
-    def energy_per_site(self):
-        return self.hamiltonian() / self.N
-
-    def magnetization_per_site(self):
-        return self.magnetization() / self.N
-
-    def magnetization_squared(self):
-        return self.magnetization() ** 2
-
-    def hamiltonian(self):
-        total_contribution = 0
-
-        for coordinate, spin in np.ndenumerate(self.lattice.config):
-            total_contribution += np.sum( spin * self.lattice.neighbors(coordinate) )
-
-        return -self.J * total_contribution
-
-    def magnetization(self):
-        return np.sum(self.lattice.config)
 
 class Lattice:
     """
@@ -79,15 +38,25 @@ class Lattice:
     Spins are represented by 1 and -1.
     """
 
+    # Coupling constant
+    J = 1
+
     def __init__(self, L):
         self.L = L
+        self.N = L * L
         self.config = self.random_configuration()
+
+        self.order_parameter = self.calculate_order_parameter()
+        self.energy_per_site = self.calculate_energy_per_site()
+        self.magnetization_per_site = self.calculate_magnetization_per_site()
+        self.magnetization = self.calculate_magnetization()
 
     def spin_at(self, coordinate):
         return self.config[coordinate]
 
     def flip_spin(self, coordinate):
         self.config[coordinate] *= -1
+        self.update_observables(coordinate)
 
     def neighbors(self, coordinate):
         x, y = coordinate
@@ -98,14 +67,93 @@ class Lattice:
             self.config[x, y - 1]
         ]
 
+    def update_observables(self, coordinate):
+        self.update_order_parameter(coordinate)
+        self.update_energy_per_site(coordinate)
+        self.update_magnetization_per_site(coordinate)
+        self.update_magnetization(coordinate)
+
+    def update_order_parameter(coordinate):
+
+    def update_energy_per_site(coordinate):
+
+
     def random_configuration(self):
-        return 2 * random.random_integers(0, 1, (self.L, self.L)) - 1
+        return random.choice([-1, 1], [self.L, self.L])
+
+    def calculate_order_parameter(self):
+        return np.abs(self.magnetization()) / self.N
+
+    def calculate_energy_per_site(self):
+        return self.hamiltonian() / self.N
+
+    def calculate_magnetization_per_site(self):
+        return self.magnetization() / self.N
+
+    def calculate_magnetization_squared(self):
+        return self.magnetization() ** 2
+
+    def calculate_hamiltonian(self):
+        total_contribution = 0
+
+        for coordinate, spin in np.ndenumerate(self.config):
+            total_contribution += np.sum( spin * self.neighbors(coordinate) )
+
+        return -self.J * total_contribution
+
+    def calculate_magnetization(self):
+        return np.sum(self.config)
+
+class Wolff:
+    """
+    Implements #perform_sweep method as only public method. Uses the Wolff algorithm to decide the next configuration of the
+    ising model configuration.
+    """
+
+    def __init__():
+        return "hoi"
+
+class Metropolis:
+    """
+    Implements #perform_sweep method as only public method. Uses the metropolis algorithm to decide the next configuration of the ising model configuration.
+    """
+
+    thermalization_sweeps = 5000
+
+    def __init__(self, model):
+        """
+        This class has a lot of "train wrecks", e.g. self.model.lattice.flip_spin. How to modularize this?
+        Maybe it is unavoidable, since the markov chain and the model are so tightly bound.
+        """
+        self.model = model
+
+    def thermalize(self):
+        for _ in range(self.thermalization_sweeps):
+            self.perform_sweep()
+
+    def perform_sweep(self):
+        self.take_steps(self.model.N)
+
+    def take_steps(self, n):
+        for _ in range(n):
+            self.take_step()
+
+    def take_step(self):
+        coordinate = self.random_coordinate()
+        energy_difference = self.model.energy_difference_with_flipped_spin(coordinate)
+
+        if energy_difference < 0 or random.uniform() < self.model.boltzmann_weight(energy_difference):
+            self.model.lattice.flip_spin(coordinate)
+
+    def random_coordinate(self):
+        return (random.randint(self.model.L), random.randint(self.model.L))
+
 
 class Measurement:
     """
     Samples the Monte Carlo Ising model and performs binning analysis.
     """
-    n_samples = 2 ** 13
+    n_samples = 2 ** 14
 
     def __init__(self, model):
         self.model = model
@@ -158,18 +206,18 @@ class Measurement:
     def integrated_autocorrelation_time(self):
         return 0.5 * ( (self.errors[-1] / self.errors[0]) ** 2 - 1 )
 
-
-temperatures = [0.125, 0.25, 0.5, 1, 2, 4]
+temperatures = [3]
 L = 4
 expectation_values = []
 stds = []
 
 for T in temperatures:
-    model = IsingModel(T, L)
+    model = IsingModel(T, L, Metropolis)
     measurement = Measurement(model)
     expectation_values.append(measurement.expectation_value)
     stds.append(measurement.std)
 
+print expectation_values
 print stds
 plot.errorbar(temperatures, expectation_values, yerr = stds)
 plot.show()
